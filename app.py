@@ -411,8 +411,15 @@ def live_hero():
     current_time = pd.Timestamp.now(tz=TZ)
     current_hour = current_time.tz_convert('UTC').floor('h').tz_convert(TZ)
     hour_index = pd.DatetimeIndex([current_hour])
-    conditions = ensemble([all_datasets[name] for name in CONDITION_MODELS if name in all_datasets],
-                          hour_index).iloc[0]
+    next_hour = current_hour + pd.Timedelta(hours=1)
+    sky_hour = next_hour if current_time - current_hour >= pd.Timedelta(minutes=30) else current_hour
+    sky = ensemble([all_datasets[name] for name in CONDITION_MODELS if name in all_datasets],
+                   pd.DatetimeIndex([current_hour, next_hour]))
+    conditions = sky.loc[sky_hour]
+    has_sky_data = pd.notna(conditions.get('code')) or pd.notna(conditions.get('cloud'))
+    if sky_hour != current_hour and not has_sky_data:
+        sky_hour = current_hour
+        conditions = sky.loc[sky_hour]
     reports = belgian_reports()
     observation = nearby_observation(reports, latitude, longitude, current_time)
     is_reves_area = locality.name.casefold() in {'rèves', 'frasnes-lez-gosselies', 'les bons villers'}
@@ -421,14 +428,16 @@ def live_hero():
     if reading and pd.Timedelta(minutes=-2) <= current_time - reading[0] <= pd.Timedelta(minutes=30):
         measured_at, temp, feel, feel_source, humidity = reading
         if feel is None:
-            feel, feel_source = charleroi_feel(reports, temp, humidity, measured_at, current_time)
-        measured = measured_at, temp, feel, feel_source, 'Station météo de Rèves'
+            feel, _ = charleroi_feel(reports, temp, humidity, measured_at, current_time)
+        measured = measured_at, temp, feel, feel_source, ''
     if not measured:
         measured = closest_temperature(network_readings(), reports, latitude, longitude, current_time)
 
     if measured:
         measured_at, temp, feel, feel_source, station = measured
-        heading = f'{station} · Relevé du {measured_at.tz_convert(TZ):%d/%m à %H:%M}'
+        heading = f'Relevé du {measured_at.tz_convert(TZ):%d/%m à %H:%M}'
+        if station:
+            heading = f'{station} · {heading}'
         if feel is None:
             estimated = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
                                  hour_index).iloc[0]
@@ -440,7 +449,7 @@ def live_hero():
         heading = f'Estimation locale · {current_hour:%d/%m à %H:%M}'
         values = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
                           hour_index).iloc[0]
-    render_forecast_hero(st, locality.name, heading, values, conditions, observation, current_hour)
+    render_forecast_hero(st, locality.name, heading, values, conditions, observation, sky_hour)
 
 
 with hero:
