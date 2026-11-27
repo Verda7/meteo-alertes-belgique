@@ -21,10 +21,10 @@ def ensemble(frames, index):
     return data
 
 
-def weather(code):
+def weather(code, night=False):
     if pd.isna(code): return '…', 'Conditions indisponibles'
-    if code == 0: return '☀️', 'Ciel dégagé'
-    if code <= 2: return '🌤️', 'Partiellement nuageux'
+    if code == 0: return ('🌙' if night else '☀️'), 'Ciel dégagé'
+    if code <= 2: return ('☁️' if night else '🌤️'), 'Partiellement nuageux'
     if code == 3: return '☁️', 'Couvert'
     if code <= 48: return '🌫️', 'Brouillard'
     if 71 <= code <= 77 or code in (85, 86): return '🌨️', 'Neige'
@@ -36,18 +36,25 @@ def measure(value, unit, precision=0):
     return '—' if pd.isna(value) else f'{value:.{precision}f}{unit}'.replace('.', ',')
 
 
-def hero(target, location, hour, row):
-    icon, condition = weather(row.get('code', float('nan')))
+def hero(target, location, hour, row, conditions, observation):
+    code = conditions.get('code', float('nan'))
+    source = 'Conditions prévues'
+    description = None
+    if observation:
+        observed_code, description, source = observation
+        if observed_code is not None:
+            code = observed_code
+    icon, condition = weather(code, night=conditions.get('daylight') == 0)
+    condition = description or condition
     temp = measure(row.get('temp', float('nan')), ' °C', 1)
     feel = measure(row.get('feel', float('nan')), ' °C', 1)
-    count = int(row.get('sources', 0))
     target.markdown(f'''<div class="hero"><h1>Météo</h1>
     <div class="sub">{html.escape(location)}</div>
     <div class="sub">© 2026 David Vergucht</div>
     <div class="sub">Prochaine heure · {hour:%d/%m %H:%M} · Heure belge</div>
     <div class="forecast-current"><div><div class="forecast-temperature">{temp}</div>
     <div>Ressenti {feel}</div><div>{condition}</div></div><span aria-hidden="true">{icon}</span></div>
-    <div class="sub">{count} modèle(s) pour la température</div></div>''', unsafe_allow_html=True)
+    <div class="sub">{html.escape(source)}</div></div>''', unsafe_allow_html=True)
 
 
 def render_summary(week, days):

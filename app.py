@@ -13,7 +13,7 @@ from streamlit.components.v1 import iframe
 from streamlit_searchbox import st_searchbox
 from weekly import ensemble, hero as render_forecast_hero, render_summary, render_charts
 from localities import DEFAULT_LOCALITY, search_localities
-from precipitation import precipitation_table
+from observations import belgian_reports, nearby_observation
 from official import COLORS as IRM_COLORS, COLOR_INDICATORS, ZONES, current_warnings, official_feed
 from xml.etree.ElementTree import ParseError
 
@@ -37,6 +37,7 @@ MODELS = {
     'ICON-EU': ('forecast', 'dwd_icon_eu_native'),
     'ICON Global': ('forecast', 'icon_global'),
 }
+CONDITION_MODELS = ('AROME HD', 'ICON-D2')
 OPENING_MODELS = ('AROME HD', 'ICON-D2', 'ECMWF IFS', 'ICON Global')
 WEEKLY_MODELS = ('AROME HD', 'ICON-D2', 'ICON-EU', 'ECMWF IFS')
 RADAR_URL = 'https://www.meteo.be/fr/meteo/previsions/precipitations'
@@ -44,7 +45,7 @@ PARAMS = {
     'temperature_2m':'temp', 'apparent_temperature':'feel', 'sunshine_duration':'sun', 'relative_humidity_2m':'rh',
     'dew_point_2m':'dew', 'precipitation':'rain', 'snowfall':'snow',
     'wind_speed_10m':'wind', 'wind_gusts_10m':'gust',
-    'cloud_cover_low':'lowcloud', 'cloud_cover':'cloud',
+    'is_day':'daylight', 'cloud_cover_low':'lowcloud', 'cloud_cover':'cloud',
     'visibility':'visibility', 'weather_code':'code',
     'soil_temperature_0cm':'ground', 'rain':'liquid', 'showers':'showers', 'cape':'cape',
 }
@@ -195,7 +196,7 @@ def open_model(endpoint, model, latitude, longitude):
           'models':model,'wind_speed_unit':'kmh','temperature_unit':'celsius','precipitation_unit':'mm'}
     # Reduce fields progressively: not every model supports every variable.
     groups=[list(PARAMS),[x for x in PARAMS if x not in ('visibility','dew_point_2m','cloud_cover_low')],
-            ['temperature_2m','apparent_temperature','sunshine_duration','relative_humidity_2m','precipitation','rain','snowfall','wind_speed_10m','wind_gusts_10m','weather_code'],
+            ['temperature_2m','apparent_temperature','sunshine_duration','is_day','relative_humidity_2m','precipitation','rain','snowfall','wind_speed_10m','wind_gusts_10m','weather_code'],
             ['temperature_2m','precipitation','wind_gusts_10m']]
     reasons=[]
     for group in groups:
@@ -383,9 +384,6 @@ locality = st_searchbox(
     key='locality_autocomplete',
 ) or DEFAULT_LOCALITY
 latitude, longitude = locality.latitude, locality.longitude
-bulletin_location = ('Frasnes-lez-Gosselies, Rèves et environs'
-                     if locality.name.casefold() == DEFAULT_LOCALITY.name.casefold()
-                     else f'{locality.name} et environs')
 horizon = st.segmented_control('Période de vigilance et du bulletin', ['24 heures', '48 heures'],
                                default='24 heures', key='horizon')
 
@@ -409,34 +407,44 @@ with st.spinner('Analyse des prévisions en cours…'):
 next_hour = start + pd.Timedelta(hours=1)
 opening = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
                    pd.DatetimeIndex([next_hour]))
-render_forecast_hero(hero, bulletin_location, next_hour, opening.iloc[0])
+conditions = ensemble([all_datasets[name] for name in CONDITION_MODELS if name in all_datasets],
+                      pd.DatetimeIndex([next_hour])).iloc[0]
+observation = nearby_observation(belgian_reports(), latitude, longitude, now)
+render_forecast_hero(hero, locality.name, next_hour, opening.iloc[0], conditions, observation)
 
 first_day = now.normalize()
 days = pd.date_range(first_day, periods=7, freq='D')
 week_index = pd.date_range(first_day, first_day + pd.DateOffset(days=7), freq='h', inclusive='left')
 week = ensemble([all_datasets[name] for name in WEEKLY_MODELS if name in all_datasets], week_index)
-precipitation_datasets = {name: frame for name, frame in all_datasets.items() if name in WEEKLY_MODELS}
 datasets = {}
-for name, frame in precipitation_datasets.items():
+for name in WEEKLY_MODELS:
+    if name not in all_datasets:
+        continue
+    frame = all_datasets[name]
     window = subset(frame, start, end)
     if window['temp'].notna().any():
         datasets[name] = window
 mode = 'Prudente'
 alerts=analyze(datasets)
-all_items=[item for group in alerts.values() for item in group]
-max_level=max((item['level'] for item in all_items),default=0)
+peaks = {key: max((item['level'] for item in alerts[key]), default=0) for key, _, _ in EVENTS}
+max_level = max(peaks.values(), default=0)
 st.markdown(f'**{len(datasets)} source(s) active(s)** · Mis à jour à {now.strftime("%H:%M")} · Analyse sur {24 if horizon=="24 heures" else 48} h')
-if max_level>=3:st.error('⚠️ **Vigilance renforcée** : au moins un modèle signale un risque élevé. Consulte les alertes ci-dessous.')
-elif max_level>=1:st.warning('⚠️ **Risques à surveiller** : un ou plusieurs signaux météorologiques ont été détectés.')
+if max_level:
+    risks = ' · '.join(
+        f'{label} ({level_name(key, peaks[key]).lower()})'
+        for key, _, label in sorted(EVENTS, key=lambda event: -peaks[event[0]]) if peaks[key]
+    )
+    banner = st.error if max_level >= 3 else st.warning
+    banner(f'⚠️ **Risques à surveiller** : {risks}')
 elif datasets:st.success('✅ Aucun signal de danger détecté dans les paramètres actuellement disponibles.')
 
-summary_tab, graphs_tab, radar_tab, public_tab, vigilance_tab, precip_tab, irm_tab = st.tabs(
+summary_tab, graphs_tab, radar_tab, public_tab, vigilance_tab, irm_tab = st.tabs(
     ['Résumé 7 jours', 'Graphiques 7 jours', 'Radar pluie', 'Bulletin',
-     'Vigilance locale', 'Précipitations', 'Alertes IRM']
+     'Vigilance locale', 'Alertes IRM']
 )
 
 with summary_tab:
-    st.caption('Seuls les modèles disponibles contribuent à chaque heure.')
+    st.caption('Moyenne horaire d’AROME HD, ICON-D2, ICON-EU et ECMWF IFS selon leurs échéances disponibles.')
     render_summary(week, days)
 
 with graphs_tab:
@@ -468,20 +476,6 @@ with vigilance_tab:
         if key=='brouillard':
             has_data=has_data or any(all(not series(df,c).empty for c in ('rh','dew','lowcloud')) for df in datasets.values())
         card(key,emoji,title,alerts[key],has_data)
-
-with precip_tab:
-    index = pd.date_range(start, periods=hours, freq='h')
-    table = precipitation_table(precipitation_datasets, index)
-    if st.checkbox('Afficher uniquement les heures avec précipitations'):
-        table = table.loc[~table.isin(['Sec', 'Donnée indisponible']).all(axis=1)]
-    if not precipitation_datasets:
-        st.info('Données de précipitations indisponibles.')
-    elif table.empty:
-        st.info('Aucune précipitation prévue dans les données disponibles.')
-    else:
-        table.index = table.index.strftime('%d/%m %Hh %Z')
-        table.index.name = 'Début du créneau (heure belge)'
-        st.dataframe(table, use_container_width=True)
 
 with irm_tab:
     st.markdown('[Consulter les avertissements officiels de l’IRM](https://www.meteo.be/fr/meteo/avertissements)')
@@ -521,7 +515,7 @@ with public_tab:
     if locality.irm_zone:
         st.caption(f'Zone IRM de la localité · {locality.irm_zone}')
     st.caption('Vigilance locale calculée à partir des modèles.')
-    public_text = make_public_bulletin(alerts, start, end, bulletin_location)
+    public_text = make_public_bulletin(alerts, start, end, locality.name)
     if not any(not frame.empty for frame in datasets.values()):
         st.info('Données insuffisantes pour préparer le bulletin.')
     elif public_text is None:
