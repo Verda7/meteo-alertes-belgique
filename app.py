@@ -79,13 +79,15 @@ CSS = '''
 .forecast-day > div:not(:first-child){border-left:1px solid #aac8ef55;padding-left:6px}
 .forecast-day .mobile-metric{display:none}
 @media(max-width:600px){
-    .forecast-day{grid-template-columns:.85fr 1.25fr 1fr .85fr .95fr 1fr;
-        gap:0;padding:9px 4px;min-height:56px;font-size:clamp(9px,3vw,13px)}
+    .forecast-day{grid-template-columns:.74fr 1.13fr .99fr .89fr 1.08fr 1.27fr;
+        gap:0;padding:9px 4px;min-height:56px;font-size:clamp(9px,2.9vw,13px);
+        -webkit-text-size-adjust:none;text-size-adjust:none;font-variant-numeric:tabular-nums}
     .forecast-day > div{padding:0 2px;line-height:1.25;overflow-wrap:normal}
     .forecast-day > div:not(:first-child){padding-left:2px}
     .forecast-day > div:nth-child(2){white-space:nowrap}
     .forecast-day > div:nth-child(2) img{width:1.25em!important;height:1.25em!important}
     .forecast-day > div:nth-child(3){font-weight:750}
+    .forecast-day > div:nth-child(n+3){white-space:nowrap}
     .forecast-day > div:nth-child(2):last-child{grid-column:span 5;white-space:normal}
 }
 .risk{background:rgba(120,145,165,.07);border:1px solid rgba(135,153,176,.22);border-radius:17px;padding:16px 17px;margin:0 0 11px}
