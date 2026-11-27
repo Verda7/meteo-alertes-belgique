@@ -129,7 +129,7 @@ def render_summary(week, days):
     st.caption('Min. / max. · Soleil estimé · Précipitations · Rafales max.')
     for day in days:
         hours = week.loc[week.index.date == day.date()]
-        cells = [f'<strong>{DAYS[day.dayofweek]}<br>{day:%d/%m}</strong>']
+        cells = [f'<strong>{DAYS[day.dayofweek]} <br>{day:%d/%m}</strong>']
         if hours.empty or hours['temp'].isna().all():
             cells.append('<span>Données indisponibles</span>')
         else:
@@ -143,9 +143,9 @@ def render_summary(week, days):
             cells += [
                 ' → '.join(icons),
                 f'{measure(hours.temp.min(), "°")} / {measure(hours.temp.max(), "°")}',
-                f'☀️ {measure(hours.sun.sum(min_count=len(hours)) / 3600, " h", 1)}',
-                f'💧 {measure(hours.rain.sum(min_count=len(hours)), " mm", 1)}',
-                f'💨 {measure(hours.gust.max(), " km/h")}',
+                f'<span class="mobile-metric">Soleil</span>☀️ {measure(hours.sun.sum(min_count=len(hours)) / 3600, " h", 1)}',
+                f'<span class="mobile-metric">Pluie</span>💧 {measure(hours.rain.sum(min_count=len(hours)), " mm", 1)}',
+                f'<span class="mobile-metric">Rafales</span>💨 {measure(hours.gust.max(), " km/h")}',
             ]
         st.markdown('<div class="forecast-day">' + ''.join(f'<div>{c}</div>' for c in cells) + '</div>',
                     unsafe_allow_html=True)
