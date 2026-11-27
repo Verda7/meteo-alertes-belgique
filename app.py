@@ -9,7 +9,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import requests
 import streamlit as st
-import plotly.graph_objects as go
+from streamlit.components.v1 import iframe
+from streamlit_searchbox import st_searchbox
+from weekly import ensemble, hero as render_forecast_hero, render_summary, render_charts
 from localities import DEFAULT_LOCALITY, search_localities
 from precipitation import precipitation_table
 from official import COLORS as IRM_COLORS, COLOR_INDICATORS, ZONES, current_warnings, official_feed
@@ -33,11 +35,13 @@ MODELS = {
     'ICON-D2': ('forecast', 'dwd_icon_d2_native'),
     'ECMWF IFS': ('forecast', 'ecmwf_ifs025'),
     'ICON-EU': ('forecast', 'dwd_icon_eu_native'),
-    'ALADIN (CHMI)': ('forecast', 'chmi_aladin_central_europe_2km'),
+    'ICON Global': ('forecast', 'icon_global'),
 }
-COLORS = {'AROME HD':'#F9B44A','ICON-D2':'#48C6C4','ECMWF IFS':'#B4A4FF', 'Meteologix':'#91A5B9', 'ICON-EU':'#F78CA8', 'ALADIN (CHMI)':'#B9D87B'}
+OPENING_MODELS = ('AROME HD', 'ICON-D2', 'ECMWF IFS', 'ICON Global')
+WEEKLY_MODELS = ('AROME HD', 'ICON-D2', 'ICON-EU', 'ECMWF IFS')
+RADAR_URL = 'https://www.meteo.be/fr/meteo/previsions/precipitations'
 PARAMS = {
-    'temperature_2m':'temp', 'relative_humidity_2m':'rh',
+    'temperature_2m':'temp', 'apparent_temperature':'feel', 'sunshine_duration':'sun', 'relative_humidity_2m':'rh',
     'dew_point_2m':'dew', 'precipitation':'rain', 'snowfall':'snow',
     'wind_speed_10m':'wind', 'wind_gusts_10m':'gust',
     'cloud_cover_low':'lowcloud', 'cloud_cover':'cloud',
@@ -54,22 +58,23 @@ EVENTS = [
 LEVELS = ('Aucun risque', 'Faible', 'Modéré', 'Élevé', 'Très élevé')
 FROST_KEYS = {'gel', 'gel_sol'}
 FROST_CRITERIA = 'Faible dès 0 °C, modéré dès −5 °C, fort dès −10 °C et sévère dès −15 °C.'
-PARAMETER_LABELS = {
-    'temp':'Température à 2 m (°C)', 'ground':'Température du sol (°C)',
-    'rain':'Précipitations totales (mm/h)', 'liquid':'Pluie (mm/h)',
-    'showers':'Averses (mm/h)', 'gust':'Rafales (km/h)', 'snow':'Neige (cm/h)',
-    'rh':'Humidité (%)', 'dew':'Point de rosée (°C)', 'visibility':'Visibilité horizontale (m)',
-    'cape':'Instabilité CAPE (J/kg)',
-}
 CSS = '''
 <style>
 .block-container{max-width:1160px;padding-bottom:2rem}
 [data-testid="stMainBlockContainer"], .block-container{padding-top:3.5rem!important}
 #MainMenu,footer{visibility:hidden}
-.hero{background:linear-gradient(115deg,#14243d,#243f5a 62%,#205466);color:white;border-radius:22px;padding:22px 24px;margin:0 0 18px;box-shadow:0 10px 30px #09182720}
+.hero{background:linear-gradient(155deg,#0856d6,#0b398c 62%,#102349);color:white;border-radius:22px;padding:22px 24px;margin:0 0 18px;box-shadow:0 10px 30px #09182720}
 .hero .eyebrow{font-size:12px;letter-spacing:2px;color:#a8d8ec;font-weight:800}
 .hero h1{font-size:clamp(23px,4vw,34px);line-height:1.16;margin:7px 0;color:#fff!important}
-.hero .sub{color:#c4d6e5;font-size:13px}
+.hero .sub{color:#e6efff;font-size:15px;margin:4px 0}
+.forecast-current{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:16px 0}
+.forecast-current > span{font-size:clamp(34px,8vw,64px)}
+.forecast-temperature{font-size:clamp(38px,10vw,66px);line-height:1.15;font-weight:800}
+.forecast-day{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:center;
+    background:linear-gradient(115deg,#153b78,#12274b);color:white;border:1px solid #648cc189;
+    border-radius:16px;padding:12px;margin-bottom:6px;text-align:center;font-size:14px;gap:8px}
+.forecast-day > div:not(:first-child){border-left:1px solid #aac8ef55;padding-left:6px}
+@media(max-width:520px){.forecast-day{grid-template-columns:repeat(3,minmax(0,1fr));font-size:13px}}
 .risk{background:rgba(120,145,165,.07);border:1px solid rgba(135,153,176,.22);border-radius:17px;padding:16px 17px;margin:0 0 11px}
 .risk .top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .risk .name{font-weight:800;font-size:17px}
@@ -109,24 +114,11 @@ CSS = '''
     line-height: 1.3;
 }
 /* Clear the Streamlit editor wrappers as well as the native input. */
-.st-key-bulletin_card [data-testid="stTextArea"],
-.st-key-bulletin_card [data-testid="stTextArea"] div,
-.st-key-bulletin_card [data-testid="stTextArea"] textarea {
-    background: transparent !important;
-    border-color: transparent !important;
-    box-shadow: none !important;
-}
-.st-key-bulletin_card [data-testid="stTextArea"]:focus-within {
-    outline: 2px solid #91672d;
-    outline-offset: 4px;
-    border-radius: 8px;
-}
-.st-key-bulletin_card [data-testid="stTextArea"] textarea {
-    text-align: left !important;
-    color: #000 !important;
-    -webkit-text-fill-color: #000 !important;
-    caret-color: #000;
-    padding: 14px 0;
+.st-key-bulletin_card .bulletin-body {
+    color: #000;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     font-size: 16px;
     line-height: 1.58;
 }
@@ -196,24 +188,14 @@ def number(x):
     except (TypeError,ValueError):return None
 
 
-def local_time(x):
-    try:return pd.to_datetime(x,utc=True,errors='coerce').tz_convert(TZ)
-    except (TypeError,ValueError,AttributeError):return pd.NaT
-
-
-def secret():
-    try:return st.secrets.get('KACHELMANN_API_KEY','')
-    except Exception:return ''
-
-
 @st.cache_data(ttl=600,show_spinner=False)
 def open_model(endpoint, model, latitude, longitude):
     url=f'https://api.open-meteo.com/v1/{endpoint}'
-    base={'latitude':latitude,'longitude':longitude,'timezone':'GMT','timeformat':'unixtime','forecast_hours':49,
+    base={'latitude':latitude,'longitude':longitude,'timezone':'Europe/Brussels','timeformat':'unixtime','forecast_days':7,
           'models':model,'wind_speed_unit':'kmh','temperature_unit':'celsius','precipitation_unit':'mm'}
     # Reduce fields progressively: not every model supports every variable.
     groups=[list(PARAMS),[x for x in PARAMS if x not in ('visibility','dew_point_2m','cloud_cover_low')],
-            ['temperature_2m','relative_humidity_2m','precipitation','snowfall','wind_gusts_10m','weather_code'],
+            ['temperature_2m','apparent_temperature','sunshine_duration','relative_humidity_2m','precipitation','rain','snowfall','wind_speed_10m','wind_gusts_10m','weather_code'],
             ['temperature_2m','precipitation','wind_gusts_10m']]
     reasons=[]
     for group in groups:
@@ -233,40 +215,6 @@ def open_model(endpoint, model, latitude, longitude):
             return df.dropna(subset=['time']).sort_values('time').reset_index(drop=True)
         except (requests.RequestException,ValueError,TypeError) as exc:reasons.append(str(exc)[:130])
     raise ValueError(' / '.join(dict.fromkeys(reasons))[:260])
-
-
-@st.cache_data(ttl=600,show_spinner=False)
-def kachelmann(key, latitude, longitude):
-    url=f'https://api.kachelmannwetter.com/v02/forecast/{latitude}/{longitude}/advanced/1h'
-    r=requests.get(url,headers={'X-API-Key':key},timeout=12,allow_redirects=False)
-    r.raise_for_status()
-    payload=r.json()
-    if not isinstance(payload,dict) or not isinstance(payload.get('data'),list):
-        raise ValueError('Réponse API inattendue')
-    if payload.get('systemOfUnits') != 'metric':
-        raise ValueError('Unités métriques attendues')
-    rows=[]
-    for item in payload['data']:
-        if not isinstance(item,dict):continue
-        t=local_time(item.get('dateTime',item.get('datetime')))
-        if pd.isna(t):continue
-        def get(*names):
-            for n in names:
-                v=number(item.get(n))
-                if v is not None:return v
-            return None
-        gust_mps = get('windGust')
-        rows.append({
-            'time':t, 'temp':get('temp'), 'rh':get('humidityRelative'), 'dew':get('dewpoint'),
-            'rain':get('precCurrent'), 'snow':None, 'wind':None,
-            'gust':gust_mps * 3.6 if gust_mps is not None else None,
-            'visibility':None, 'lowcloud':get('cloudCoverageLow'), 'cloud':get('cloudCoverage'),
-            'code':get('wmoCode'),
-            'ground':None, 'liquid':None, 'showers':None, 'cape':None,
-        })
-    if not rows:raise ValueError('Aucune échéance disponible')
-    df=pd.DataFrame(rows).sort_values('time').drop_duplicates('time')
-    return df
 
 
 def subset(df,start,end):
@@ -413,98 +361,67 @@ def mini(label,value,hint):
     st.markdown(f'<div class="mini"><div class="label">{html.escape(label)}</div><div class="value">{html.escape(value)}</div><div class="hint">{html.escape(hint)}</div></div>',unsafe_allow_html=True)
 
 
-hero = st.empty()
-with st.form('locality_search'):
-    query = st.text_input('Localité belge ou code postal', max_chars=100)
-    submitted = st.form_submit_button('Rechercher')
-
-if submitted:
+def locality_suggestions(query):
     query = query.strip()
-    if len(query) < 2:
-        st.warning('Saisis un nom de localité ou un code postal.')
-    else:
-        try:
-            results = search_localities(query)
-        except (requests.RequestException, ValueError, KeyError, TypeError):
-            st.warning('Recherche de localités temporairement indisponible.')
-        else:
-            st.session_state.locality_results = results
-            if not results:
-                st.info('Aucune localité belge trouvée.')
+    if len(query) < 2 or len(query) > 100:
+        return []
+    try:
+        return [
+            (' · '.join(filter(None, (place.name, place.municipality, place.province))), place)
+            for place in search_localities(query)
+        ]
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        st.warning('Recherche de localités temporairement indisponible.')
+        return []
 
-locations = [DEFAULT_LOCALITY] + [
-    place for place in st.session_state.get('locality_results', [])
-    if (place.name, place.province) != (DEFAULT_LOCALITY.name, DEFAULT_LOCALITY.province)
-]
-locality = st.selectbox(
-    'Localité surveillée', locations,
-    format_func=lambda place: ' · '.join(filter(None, (place.name, place.municipality, place.province))),
-)
+
+hero = st.empty()
+locality = st_searchbox(
+    locality_suggestions, label='Localité en Belgique',
+    placeholder='Ex. Namur ou 5000', debounce=350, edit_after_submit='option',
+    default_options=[('Frasnes-lez-Gosselies · Hainaut', DEFAULT_LOCALITY)],
+    key='locality_autocomplete',
+) or DEFAULT_LOCALITY
 latitude, longitude = locality.latitude, locality.longitude
 bulletin_location = ('Frasnes-lez-Gosselies, Rèves et environs'
-                     if locality == DEFAULT_LOCALITY else f'{locality.name} et environs')
-hero.markdown(f'''<div class="hero"><div class="eyebrow">SURVEILLANCE MÉTÉOROLOGIQUE LOCALE</div>
-<h1>⚠️ Météo Alertes</h1><div class="sub">{html.escape(locality.name)} · Heure belge</div><div class="sub">© 2026 David Vergucht</div></div>''',unsafe_allow_html=True)
-bar1,bar2=st.columns([2,1])
-with bar1:
-    horizon=st.segmented_control('Période de surveillance',['24 heures','48 heures'],default='24 heures',key='horizon')
-with bar2:
-    if st.button('🔄 Actualiser',use_container_width=True):
-        open_model.clear()
-        kachelmann.clear()
-        official_feed.clear()
-        st.rerun()
-
-with st.expander('⚙️ Modèles et méthode de calcul',expanded=False):
-    st.caption('Les modèles sélectionnés servent aux moyennes et à la détection des risques. Les risques ne sont jamais masqués par une moyenne.')
-    chosen=st.multiselect('Modèles actifs',list(MODELS),default=list(MODELS))
-    mode=st.radio('Synthèse des valeurs',['Moyenne des modèles','Prudente'],index=1,horizontal=True,
-                  help='Prudente = minimum le plus froid, rafale et pluie les plus fortes parmi les modèles actifs.')
-    use_k=st.checkbox('Inclure les prévisions Meteologix',value=bool(secret()),
-                      help='Ce flux ne peut pas être présenté comme Swiss HD 4×4 sans identification vérifiable du modèle.')
-    st.caption('Le flux Meteologix fournit jusqu’à 24 échéances horaires et ne précise pas le modèle d’origine.')
-
-if 'graph_models' not in st.session_state:
-    st.session_state.graph_models = chosen + (['Meteologix'] if use_k else [])
-graph_models = st.session_state.graph_models
-requested_models = [name for name in MODELS if name in chosen or name in graph_models]
+                     if locality.name.casefold() == DEFAULT_LOCALITY.name.casefold()
+                     else f'{locality.name} et environs')
+horizon = st.segmented_control('Période de vigilance et du bulletin', ['24 heures', '48 heures'],
+                               default='24 heures', key='horizon')
 
 now = pd.Timestamp.now(tz=TZ)
 start = now.tz_convert('UTC').floor('h').tz_convert(TZ)
 hours = 24 if horizon == '24 heures' else 48
 end = start + pd.Timedelta(hours=hours)
-datasets={};errors={}
+all_datasets = {}
+errors = {}
 with st.spinner('Analyse des prévisions en cours…'):
-    for name in requested_models:
-        endpoint,model=MODELS[name]
+    for name, (endpoint, model) in MODELS.items():
         try:
-            df=subset(open_model(endpoint,model,latitude,longitude),start,end + pd.Timedelta(hours=1))
-            if not df.empty and series(df,'temp').size:datasets[name]=df
-            else:errors[name]='Aucune donnée exploitable pour cette échéance.'
-        except (ValueError,requests.RequestException,TypeError) as exc:errors[name]=str(exc)[:220]
-    if use_k or (secret() and 'Meteologix' in graph_models):
-        if not secret():errors['Meteologix']='Clé KACHELMANN_API_KEY absente de Streamlit Secrets.'
-        else:
-            try:
-                df=kachelmann(secret(),latitude,longitude)
-                # Only use as unidentified unless supplier metadata unambiguously confirms the model.
-                label='Meteologix'
-                df=subset(df,start,end + pd.Timedelta(hours=1))
-                if not df.empty:datasets[label]=df
-            except requests.HTTPError as exc:
-                errors['Meteologix']=f'Le fournisseur a répondu HTTP {exc.response.status_code}.'
-            except (ValueError,requests.RequestException,TypeError):
-                errors['Meteologix']='Prévisions temporairement indisponibles.'
+            frame = open_model(endpoint, model, latitude, longitude)
+            if frame['temp'].notna().any():
+                all_datasets[name] = frame
+            else:
+                errors[name] = 'Aucune donnée à cet endroit.'
+        except (ValueError, requests.RequestException, TypeError) as exc:
+            errors[name] = str(exc)[:220]
 
-if not datasets:
-    st.error('Aucune prévision disponible. Consulte « Diagnostic des données » en bas de page.')
-    with st.expander('Diagnostic des données',expanded=True):
-        for k,v in errors.items():st.write(f'**{k} :** {v}')
+next_hour = start + pd.Timedelta(hours=1)
+opening = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
+                   pd.DatetimeIndex([next_hour]))
+render_forecast_hero(hero, bulletin_location, next_hour, opening.iloc[0])
 
-all_datasets = datasets
-precipitation_datasets = {name: frame for name, frame in all_datasets.items()
-                          if name in chosen or (name == 'Meteologix' and use_k)}
-datasets = {name: subset(frame,start,end) for name,frame in precipitation_datasets.items()}
+first_day = now.normalize()
+days = pd.date_range(first_day, periods=7, freq='D')
+week_index = pd.date_range(first_day, first_day + pd.DateOffset(days=7), freq='h', inclusive='left')
+week = ensemble([all_datasets[name] for name in WEEKLY_MODELS if name in all_datasets], week_index)
+precipitation_datasets = {name: frame for name, frame in all_datasets.items() if name in WEEKLY_MODELS}
+datasets = {}
+for name, frame in precipitation_datasets.items():
+    window = subset(frame, start, end)
+    if window['temp'].notna().any():
+        datasets[name] = window
+mode = 'Prudente'
 alerts=analyze(datasets)
 all_items=[item for group in alerts.values() for item in group]
 max_level=max((item['level'] for item in all_items),default=0)
@@ -513,9 +430,22 @@ if max_level>=3:st.error('⚠️ **Vigilance renforcée** : au moins un modèle 
 elif max_level>=1:st.warning('⚠️ **Risques à surveiller** : un ou plusieurs signaux météorologiques ont été détectés.')
 elif datasets:st.success('✅ Aucun signal de danger détecté dans les paramètres actuellement disponibles.')
 
-vigilance_tab, precip_tab, graphs_tab, irm_tab, public_tab = st.tabs(
-    ['Vigilance locale', 'Précipitations', 'Graphiques', 'Alertes IRM', 'Bulletin']
+summary_tab, graphs_tab, radar_tab, public_tab, vigilance_tab, precip_tab, irm_tab = st.tabs(
+    ['Résumé 7 jours', 'Graphiques 7 jours', 'Radar pluie', 'Bulletin',
+     'Vigilance locale', 'Précipitations', 'Alertes IRM']
 )
+
+with summary_tab:
+    st.caption('Seuls les modèles disponibles contribuent à chaque heure.')
+    render_summary(week, days)
+
+with graphs_tab:
+    render_charts(week, days)
+
+with radar_tab:
+    st.link_button('Ouvrir le radar de l’IRM', RADAR_URL)
+    iframe(RADAR_URL, height=600, scrolling=True)
+
 with vigilance_tab:
     st.markdown('<div class="section">Vue d’ensemble</div>',unsafe_allow_html=True)
     min_temp,n_temp=choose_aggregate(datasets,'temp','min',mode,hours)
@@ -538,59 +468,6 @@ with vigilance_tab:
         if key=='brouillard':
             has_data=has_data or any(all(not series(df,c).empty for c in ('rh','dew','lowcloud')) for df in datasets.values())
         card(key,emoji,title,alerts[key],has_data)
-
-with graphs_tab:
-    graph_models = st.multiselect('Modèles à afficher', list(MODELS) + ['Meteologix'],
-                                  key='graph_models')
-    show_average = st.checkbox('Afficher la moyenne horaire', value=True)
-    st.caption('La moyenne utilise les modèles affichés qui ont une valeur à cette heure.')
-    field = st.selectbox('Paramètre', list(PARAMETER_LABELS), format_func=PARAMETER_LABELS.__getitem__)
-    hourly_index = pd.date_range(start, periods=hours, freq='h')
-    columns = {}
-    for name in graph_models:
-        if name not in all_datasets:
-            continue
-        df = all_datasets[name]
-        values = pd.to_numeric(df.set_index('time')[field], errors='coerce').reindex(hourly_index)
-        if values.notna().any():
-            columns[name] = values
-    if not columns:
-        st.info('Aucune donnée pour ce paramètre et cette sélection.')
-    fig = go.Figure()
-    local_hours = hourly_index.strftime('%d/%m %H:%M %Z')
-    for name, values in columns.items():
-        fig.add_trace(go.Scatter(x=hourly_index, y=values, customdata=local_hours,
-                                 mode='lines+markers', connectgaps=False, name=name,
-                                 line={'width':2.5,'color':COLORS[name]}, marker={'size':4},
-                                 hovertemplate='%{customdata} · %{y:.2f}<extra>%{fullData.name}</extra>'))
-    if columns and show_average:
-        model_values = pd.DataFrame(columns, index=hourly_index)
-        hover_data = list(zip(local_hours, model_values.count(axis=1)))
-        fig.add_trace(go.Scatter(
-            x=hourly_index, y=model_values.mean(axis=1), customdata=hover_data,
-            mode='lines', name='Moyenne des modèles', connectgaps=False,
-            line={'width':3.5,'color':'#FFFFFF','dash':'dot'},
-            hovertemplate='%{customdata[0]} · %{y:.2f} · %{customdata[1]} modèle(s)<extra>Moyenne</extra>',
-        ))
-    if field in ('temp', 'ground'):fig.add_hline(y=0,line_dash='dash',line_color='#8b9aaf')
-    # Anchor the legend to the figure so its spacing stays stable in full screen.
-    fig.update_layout(height=390, margin=dict(l=12, r=12, t=42, b=140),
-                      title=dict(text='Heure belge', x=0.5, xanchor='center', font=dict(size=14)),
-                      legend=dict(orientation='h', x=0, xanchor='left',
-                                  yref='container', y=0, yanchor='bottom'),
-                      xaxis_title=None,yaxis_title=None,hovermode='x unified',
-                      template='plotly_dark',paper_bgcolor='#14243d',plot_bgcolor='#14243d')
-    ticks = hourly_index[::(hours // 4)]
-    fig.update_xaxes(tickmode='array', tickvals=ticks,
-                     ticktext=ticks.strftime('%d/%m<br>%H:%M'),
-                     tickangle=0, automargin=True)
-    if field in ('temp', 'ground'):
-        fig.update_yaxes(tickmode='auto', nticks=7, ticksuffix=' °C', automargin=True)
-    if columns:
-        st.plotly_chart(fig,use_container_width=True,theme=None)
-    missing = [name for name in graph_models if name not in columns]
-    if missing:
-        st.caption('Données indisponibles pour ce paramètre · ' + ', '.join(missing))
 
 with precip_tab:
     index = pd.date_range(start, periods=hours, freq='h')
@@ -640,29 +517,32 @@ with irm_tab:
             st.info(f'{zone} · Aucun avertissement signalé sur la période.')
 
 with public_tab:
-    st.subheader('Bulletin d’avertissements pour la page météo')
+    st.subheader('Bulletin d’avertissements')
+    if locality.irm_zone:
+        st.caption(f'Zone IRM de la localité · {locality.irm_zone}')
+    st.caption('Vigilance locale calculée à partir des modèles.')
     public_text = make_public_bulletin(alerts, start, end, bulletin_location)
     if not any(not frame.empty for frame in datasets.values()):
         st.info('Données insuffisantes pour préparer le bulletin.')
     elif public_text is None:
         st.info('Aucun risque détecté sur la période avec les données disponibles.')
     else:
-        st.caption('Tu peux modifier le texte ci-dessous. Le téléchargement inclut le titre.')
         title, body = public_text.split('\n', 1)
         with st.container(key='bulletin_card'):
-            st.markdown(f'<div class="bulletin-title">{html.escape(title)}</div>',
-                        unsafe_allow_html=True)
-            edited_body = st.text_area('Texte du bulletin à copier', body, height=390,
-                                       label_visibility='collapsed')
-        st.download_button('Télécharger le bulletin public (.txt)', data=f'{title}\n{edited_body}',
+            st.markdown(
+                f'<div class="bulletin-title">{html.escape(title)}</div>'
+                f'<div class="bulletin-body">{html.escape(body)}</div>',
+                unsafe_allow_html=True,
+            )
+        st.download_button('Télécharger le bulletin public (.txt)', data=public_text,
                            file_name='bulletin_avertissements.txt', mime='text/plain')
+
 
 with st.expander('🔎 Diagnostic des données et limites',expanded=False):
     for name,df in all_datasets.items():
         fields=', '.join(k for k in ('temp','rain','snow','gust','rh','dew','visibility','lowcloud','code') if not series(df,k).empty)
         st.write(f'**{name}** : {len(df)} échéances · {fields or "aucun paramètre"}')
     for name,error in errors.items():st.warning(f'{name} : {error}')
-    st.caption('Meteologix · le nom du modèle d’origine est absent de la réponse.')
     st.caption('Verglas : estimation à partir de la température de l’air et de l’humidité/pluie, pas une observation de la chaussée. Brouillard : estimation si visibilité absente. Orages : codes météo, pas diagnostic convectif complet.')
 
-st.markdown('<div class="note" style="text-align:center;margin-top:30px;padding-top:17px;border-top:1px solid #8b9aad33">Données : Open-Meteo (AROME HD, ICON-D2, ECMWF IFS, ICON-EU et ALADIN CHMI selon disponibilité) · Meteologix si activé.<br>© 2026 David Vergucht — Tous droits réservés.<br>Outil indicatif : ne remplace pas les avertissements officiels de l’IRM.</div>',unsafe_allow_html=True)
+st.markdown('<div class="note" style="text-align:center;margin-top:30px;padding-top:17px;border-top:1px solid #8b9aad33">Données : Open-Meteo (AROME HD, ICON-D2, ECMWF IFS, ICON-EU et ICON Global selon disponibilité.<br>© 2026 David Vergucht — Tous droits réservés.<br>Outil indicatif : ne remplace pas les avertissements officiels de l’IRM.</div>',unsafe_allow_html=True)
