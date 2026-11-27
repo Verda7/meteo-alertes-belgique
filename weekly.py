@@ -113,6 +113,18 @@ def hero(target, location, heading, row, conditions, observation, condition_hour
     <div class="sub">{html.escape(source)}</div></div>''', unsafe_allow_html=True)
 
 
+def summary_icon(code, icon, label):
+    asset = {1: 'peu_nuageux', 2: 'partiellement_nuageux'}.get(code)
+    if asset:
+        try:
+            return (f'<img src="data:image/png;base64,{station_icon(asset)}" '
+                    f'alt="{html.escape(label)}" title="{html.escape(label)}" '
+                    'style="width:28px;height:28px;object-fit:contain;vertical-align:middle">')
+        except OSError:
+            pass
+    return f'<span title="{html.escape(label)}">{icon}</span>'
+
+
 def render_summary(week, days):
     st.caption('Min. / max. · Soleil estimé · Précipitations · Rafales max.')
     for day in days:
@@ -125,8 +137,9 @@ def render_summary(week, days):
             icons = []
             for period in periods:
                 codes = period['code'].mode()
-                icon, label = weather(codes.iloc[0] if not codes.empty else float('nan'))
-                icons.append(f'<span title="{label}">{icon}</span>')
+                code = codes.iloc[0] if not codes.empty else float('nan')
+                icon, label = weather(code)
+                icons.append(summary_icon(code, icon, label))
             cells += [
                 ' → '.join(icons),
                 f'{measure(hours.temp.min(), "°")} / {measure(hours.temp.max(), "°")}',
