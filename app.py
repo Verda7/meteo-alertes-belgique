@@ -13,7 +13,8 @@ from streamlit.components.v1 import iframe
 from streamlit_searchbox import st_searchbox
 from weekly import ensemble, hero as render_forecast_hero, render_summary, render_charts
 from localities import DEFAULT_LOCALITY, search_localities
-from observations import belgian_reports, nearby_observation
+from observations import (belgian_reports, charleroi_feel, closest_temperature,
+                          nearby_observation, network_readings, reves_reading)
 from official import COLORS as IRM_COLORS, COLOR_INDICATORS, ZONES, current_warnings, official_feed
 from xml.etree.ElementTree import ParseError
 
@@ -70,6 +71,7 @@ CSS = '''
 .hero .sub{color:#e6efff;font-size:15px;margin:4px 0}
 .forecast-current{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:16px 0}
 .forecast-current > span{font-size:clamp(34px,8vw,64px)}
+.forecast-feel{font-size:clamp(20px,4vw,30px);margin:4px 0 10px}
 .forecast-temperature{font-size:clamp(38px,10vw,66px);line-height:1.15;font-weight:800}
 .forecast-day{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:center;
     background:linear-gradient(115deg,#153b78,#12274b);color:white;border:1px solid #648cc189;
@@ -376,7 +378,7 @@ def locality_suggestions(query):
         return []
 
 
-hero = st.empty()
+hero = st.container()
 locality = st_searchbox(
     locality_suggestions, label='Localité en Belgique',
     placeholder='Ex. Namur ou 5000', debounce=350, edit_after_submit='option',
@@ -404,13 +406,45 @@ with st.spinner('Analyse des prévisions en cours…'):
         except (ValueError, requests.RequestException, TypeError) as exc:
             errors[name] = str(exc)[:220]
 
-next_hour = start + pd.Timedelta(hours=1)
-opening = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
-                   pd.DatetimeIndex([next_hour]))
-conditions = ensemble([all_datasets[name] for name in CONDITION_MODELS if name in all_datasets],
-                      pd.DatetimeIndex([next_hour])).iloc[0]
-observation = nearby_observation(belgian_reports(), latitude, longitude, now)
-render_forecast_hero(hero, locality.name, next_hour, opening.iloc[0], conditions, observation)
+@st.fragment(run_every=60)
+def live_hero():
+    current_time = pd.Timestamp.now(tz=TZ)
+    current_hour = current_time.tz_convert('UTC').floor('h').tz_convert(TZ)
+    hour_index = pd.DatetimeIndex([current_hour])
+    conditions = ensemble([all_datasets[name] for name in CONDITION_MODELS if name in all_datasets],
+                          hour_index).iloc[0]
+    reports = belgian_reports()
+    observation = nearby_observation(reports, latitude, longitude, current_time)
+    is_reves_area = locality.name.casefold() in {'rèves', 'frasnes-lez-gosselies', 'les bons villers'}
+    reading = reves_reading() if is_reves_area else None
+    measured = None
+    if reading and pd.Timedelta(minutes=-2) <= current_time - reading[0] <= pd.Timedelta(minutes=30):
+        measured_at, temp, feel, feel_source, humidity = reading
+        if feel is None:
+            feel, feel_source = charleroi_feel(reports, temp, humidity, measured_at, current_time)
+        measured = measured_at, temp, feel, feel_source, 'Station météo de Rèves'
+    if not measured:
+        measured = closest_temperature(network_readings(), reports, latitude, longitude, current_time)
+
+    if measured:
+        measured_at, temp, feel, feel_source, station = measured
+        heading = f'{station} · Relevé du {measured_at.tz_convert(TZ):%d/%m à %H:%M}'
+        if feel is None:
+            estimated = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
+                                 hour_index).iloc[0]
+            feel = estimated.get('feel', float('nan'))
+            if pd.notna(feel):
+                feel_source = 'Estimation locale des modèles'
+        values = {'temp': temp, 'feel': feel, 'feel_source': feel_source}
+    else:
+        heading = f'Estimation locale · {current_hour:%d/%m à %H:%M}'
+        values = ensemble([all_datasets[name] for name in OPENING_MODELS if name in all_datasets],
+                          hour_index).iloc[0]
+    render_forecast_hero(st, locality.name, heading, values, conditions, observation, current_hour)
+
+
+with hero:
+    live_hero()
 
 first_day = now.normalize()
 days = pd.date_range(first_day, periods=7, freq='D')
@@ -444,7 +478,6 @@ summary_tab, graphs_tab, radar_tab, public_tab, vigilance_tab, irm_tab = st.tabs
 )
 
 with summary_tab:
-    st.caption('Moyenne horaire d’AROME HD, ICON-D2, ICON-EU et ECMWF IFS selon leurs échéances disponibles.')
     render_summary(week, days)
 
 with graphs_tab:

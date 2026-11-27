@@ -82,15 +82,18 @@ def measure(value, unit, precision=0):
     return '—' if pd.isna(value) else f'{value:.{precision}f}{unit}'.replace('.', ',')
 
 
-def hero(target, location, hour, row, conditions, observation):
+def hero(target, location, heading, row, conditions, observation, condition_hour):
     code, asset, condition = station_condition(conditions)
     night = conditions.get('daylight') == 0
-    source = 'Conditions prévues'
+    source = f'Estimation du ciel à {condition_hour:%H:%M}'
     if observation:
-        observed_code, description, source = observation
+        observed_code, description, observation_source = observation
+        source = observation_source if observed_code is not None else f'{source} · {observation_source.removeprefix("Conditions prévues · ")}'
         if observed_code is not None:
             code, asset, condition = station_condition({'code': observed_code})
             condition = description or condition
+    if night and code == 0 and condition == 'Ciel clair':
+        condition = 'Ciel serein'
     icon, _ = weather(code, night=night)
     if asset and not (night and asset in {'ciel_clair', 'peu_nuageux', 'partiellement_nuageux', 'eclaircies_pluie'}):
         try:
@@ -99,12 +102,14 @@ def hero(target, location, hour, row, conditions, observation):
             pass
     temp = measure(row.get('temp', float('nan')), ' °C', 1)
     feel = measure(row.get('feel', float('nan')), ' °C', 1)
+    feel_source = row.get('feel_source', '')
+    feel_note = f'<div class="sub">{html.escape(feel_source)}</div>' if feel_source else ''
     target.markdown(f'''<div class="hero"><h1>Météo</h1>
     <div class="sub">{html.escape(location)}</div>
     <div class="sub">© 2026 David Vergucht</div>
-    <div class="sub">Prochaine heure · {hour:%d/%m %H:%M} · Heure belge</div>
+    <div class="sub">{html.escape(heading)} · Heure belge</div>
     <div class="forecast-current"><div><div class="forecast-temperature">{temp}</div>
-    <div>Ressenti {feel}</div><div>{html.escape(condition)}</div></div><span aria-hidden="true">{icon}</span></div>
+    <div class="forecast-feel">Ressenti {feel}{feel_note}</div><div>{html.escape(condition)}</div></div><span aria-hidden="true">{icon}</span></div>
     <div class="sub">{html.escape(source)}</div></div>''', unsafe_allow_html=True)
 
 
