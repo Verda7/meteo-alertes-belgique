@@ -44,7 +44,7 @@ RADAR_URL = 'https://www.meteo.be/fr/meteo/previsions/precipitations'
 PARAMS = {
     'temperature_2m':'temp', 'apparent_temperature':'feel', 'sunshine_duration':'sun', 'relative_humidity_2m':'rh',
     'dew_point_2m':'dew', 'precipitation':'rain', 'snowfall':'snow',
-    'wind_speed_10m':'wind', 'wind_gusts_10m':'gust',
+    'precipitation_probability':'rain_probability', 'wind_speed_10m':'wind', 'wind_gusts_10m':'gust',
     'is_day':'daylight', 'cloud_cover_low':'lowcloud', 'cloud_cover':'cloud',
     'visibility':'visibility', 'weather_code':'code',
     'soil_temperature_0cm':'ground', 'rain':'liquid', 'showers':'showers', 'cape':'cape',
@@ -196,7 +196,7 @@ def open_model(endpoint, model, latitude, longitude):
           'models':model,'wind_speed_unit':'kmh','temperature_unit':'celsius','precipitation_unit':'mm'}
     # Reduce fields progressively: not every model supports every variable.
     groups=[list(PARAMS),[x for x in PARAMS if x not in ('visibility','dew_point_2m','cloud_cover_low')],
-            ['temperature_2m','apparent_temperature','sunshine_duration','is_day','relative_humidity_2m','precipitation','rain','snowfall','wind_speed_10m','wind_gusts_10m','weather_code'],
+            ['temperature_2m','apparent_temperature','sunshine_duration','is_day','relative_humidity_2m','precipitation','rain','snowfall','wind_speed_10m','wind_gusts_10m','weather_code','cloud_cover'],
             ['temperature_2m','precipitation','wind_gusts_10m']]
     reasons=[]
     for group in groups:

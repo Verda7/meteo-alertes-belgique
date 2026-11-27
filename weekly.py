@@ -1,5 +1,7 @@
 """Synthèse publique et graphiques des prévisions horaires."""
+import base64
 import html
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -24,7 +26,8 @@ def ensemble(frames, index):
 def weather(code, night=False):
     if pd.isna(code): return '…', 'Conditions indisponibles'
     if code == 0: return ('🌙' if night else '☀️'), 'Ciel dégagé'
-    if code <= 2: return ('☁️' if night else '🌤️'), 'Partiellement nuageux'
+    if code == 1: return ('🌙' if night else '🌤️'), 'Peu nuageux'
+    if code == 2: return ('☁️' if night else '🌤️'), 'Partiellement nuageux'
     if code == 3: return '☁️', 'Couvert'
     if code <= 48: return '🌫️', 'Brouillard'
     if 71 <= code <= 77 or code in (85, 86): return '🌨️', 'Neige'
@@ -32,20 +35,68 @@ def weather(code, night=False):
     return '🌧️', 'Précipitations'
 
 
+def station_condition(row):
+    """Applique les seuils du bandeau de Station Météo Final."""
+    code = row.get('code', float('nan'))
+    rain = row.get('rain', float('nan'))
+    cloud = row.get('cloud', float('nan'))
+    sun = row.get('sun', float('nan')) / 3600
+    humidity, temp, dew, wind = (row.get(field, float('nan')) for field in ('rh', 'temp', 'dew', 'wind'))
+    fog = code in (45, 48) or (humidity >= 95 and abs(temp - dew) <= 1.4 and wind <= 10)
+    if fog:
+        return 48 if code == 48 else 45, 'brouillard', 'Brouillard givrant' if code == 48 else 'Brume / brouillard possible'
+    if code in (95, 96, 99):
+        return code, 'orage', {95: 'Orage', 96: 'Orage avec grêle', 99: 'Orage violent'}[code]
+    if code in (56, 57, 66, 67):
+        return code, 'pluie_faible', 'Précipitations verglaçantes'
+    if code in (71, 73, 75, 77, 85, 86):
+        return code, None, weather(code)[1]
+    if code in (51, 53, 55) and not rain >= 1:
+        return code, 'bruine', {51: 'Bruine faible', 53: 'Bruine', 55: 'Bruine forte'}[code]
+    if rain >= 4 or code in (65, 82):
+        return 65, 'pluie_forte', 'Averses fortes' if code == 82 else 'Pluie forte'
+    if rain >= 1 or code in (63, 81):
+        icon = 'eclaircies_pluie' if sun >= .15 or cloud < 78 else 'pluie_moderee'
+        return 63, icon, 'Averses' if code == 81 else 'Pluie'
+    if rain > .05 or row.get('rain_probability', float('nan')) >= 45 or code in (51, 53, 55, 61, 80):
+        icon = 'eclaircies_pluie' if sun >= .15 or cloud < 78 else 'pluie_faible'
+        return 61, icon, 'Averses faibles' if code == 80 else 'Pluie faible'
+    if code == 0 or cloud < 22:
+        return 0, 'ciel_clair', 'Ciel clair'
+    if sun >= .65 or code == 1 or cloud < 45:
+        return 1, 'peu_nuageux', 'Peu nuageux'
+    if sun >= .25 or code == 2 or cloud < 70:
+        return 2, 'partiellement_nuageux', 'Partiellement nuageux'
+    if code == 3 or pd.notna(cloud):
+        return 3, 'tres_nuageux', 'Couvert'
+    return code, None, weather(code)[1]
+
+
+@st.cache_data(show_spinner=False)
+def station_icon(asset):
+    path = Path(__file__).parent / 'icons' / f'{asset}.png'
+    return base64.b64encode(path.read_bytes()).decode('ascii')
+
+
 def measure(value, unit, precision=0):
     return '—' if pd.isna(value) else f'{value:.{precision}f}{unit}'.replace('.', ',')
 
 
 def hero(target, location, hour, row, conditions, observation):
-    code = conditions.get('code', float('nan'))
+    code, asset, condition = station_condition(conditions)
+    night = conditions.get('daylight') == 0
     source = 'Conditions prévues'
-    description = None
     if observation:
         observed_code, description, source = observation
         if observed_code is not None:
-            code = observed_code
-    icon, condition = weather(code, night=conditions.get('daylight') == 0)
-    condition = description or condition
+            code, asset, condition = station_condition({'code': observed_code})
+            condition = description or condition
+    icon, _ = weather(code, night=night)
+    if asset and not (night and asset in {'ciel_clair', 'peu_nuageux', 'partiellement_nuageux', 'eclaircies_pluie'}):
+        try:
+            icon = f'<img src="data:image/png;base64,{station_icon(asset)}" alt="" style="width:1.4em;height:1.4em;object-fit:contain">'
+        except OSError:
+            pass
     temp = measure(row.get('temp', float('nan')), ' °C', 1)
     feel = measure(row.get('feel', float('nan')), ' °C', 1)
     target.markdown(f'''<div class="hero"><h1>Météo</h1>
@@ -53,7 +104,7 @@ def hero(target, location, hour, row, conditions, observation):
     <div class="sub">© 2026 David Vergucht</div>
     <div class="sub">Prochaine heure · {hour:%d/%m %H:%M} · Heure belge</div>
     <div class="forecast-current"><div><div class="forecast-temperature">{temp}</div>
-    <div>Ressenti {feel}</div><div>{condition}</div></div><span aria-hidden="true">{icon}</span></div>
+    <div>Ressenti {feel}</div><div>{html.escape(condition)}</div></div><span aria-hidden="true">{icon}</span></div>
     <div class="sub">{html.escape(source)}</div></div>''', unsafe_allow_html=True)
 
 
